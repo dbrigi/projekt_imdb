@@ -17,6 +17,10 @@ knitr::opts_chunk$set(echo = TRUE)
 #Ezt a változót később el is hagytam, mert teljesen használhatatlan. IMDB-n néha feltüntetik a premier heti bevételeket, az USA bevételeket és az összes (világszintű) bevételt. Ezek közül gyakran hiányzik 1-2. Ezt az adatok gyűjtője nem vette figyelembe. Mivel nem akarom ugyanannak tekinteni az USA-bevételeket és az összes bevételt, ezért én is megpróbálkoztam a scrapeléssel.
 #Nem lehet pontosan kiszűrni, de az 1000 dollár alattiak szinte biztosan elírások (vagy csak az USA-beli bevételeket vették figyelembe).
 
+#A megfigyelések kiinduláskor 1970-től 2017-ig terjedtek.
+#Idősoros adatokkal nehezebb lenne dolgozni, évtizetek alatt megváltozhat a trend. Pl.: a régen népszerű filmeket olyanok is nézték, akik mára már megöregedtek, megváltoztak a filmnézési szokásaik, arról nem si beszélve, hogy valósznínűleg az IMDB-t inkább a fiatalabb korosztály látogatja. A fiatalabbak körében pedig nem túl népszerűek a régi filmek. 
+#Felteszem, hogy a 2010-2016 között nem történt változás a filmnézési/értékelési szokásokban. (2017-et is kiveszem, nem tudom pontosan, hogy mikor gyűjtötték az adatokat. Nem szeretnék nem megjelent filmeket számításba venni, úgy gondolom megtekintés előtt eltérnek az értékelések a megtekintés utániaktól.) Tehát a 2010-es éveket egy időszaknak tekintem.
+
 #Végső változók:
 #revenue_new_1000: összes bevétel 1000 usd-ben
 #budget_1000: (becsült) költségvetés 1000 usd-ben
@@ -26,7 +30,9 @@ knitr::opts_chunk$set(echo = TRUE)
 #popularity: a pro tagok tudják, hogy pontosan hogyan számolják, annyi ismert, hogy a filmadatlapok megtekintése beleszámít.
 #imdb_pontszám: felhasználók értékelések
 #dummy_en: 1, ha az eredeti nyelv az angol, 0 egyébként
-#language_dummy: 1, ha szinkronizálták (nem naprakész adatok), 0 ha nem
+#language_dummy: 1, ha szinkronizálták (nem naprakész adatok), 0 ha nem.
+
+#Összegzés:
 
 #   popularity          runtime       vote_average     vote_count      language_dummy  
 # Min.   :  0.1101   Min.   : 66.0   Min.   :3.500   Min.   :   11.0   Min.   :0.0000  
@@ -47,7 +53,7 @@ knitr::opts_chunk$set(echo = TRUE)
 #Előrejelzés választás indoklása: a változók nagyrésze kvantitatív. Készítettem pár dummy-t, de ezek között és a többi változó között nem volt erős kapcsolat. 
 #A bevétel (revenue_new) változó volt az, ami elég jól korrelált a többivel, és az összefüggéseket is logikusnak gondoltam (lehet ok-okozati kapcsolat), pl.: az imdb értékelés (imdb_score) nyilválóan pozitívan hat a bevételekre. A népszerűségre (popularity) is hasonlókat feltételezet, ez esetben gyengébb kapcsolatra számítok: a népszerűség forrása lehet negatív is (megnézik a film adatlapját, de nem nézik meg, legalábbis nem fizetnek a rossznak gondolt filmért).
 
-#Modellválasztásnál először az össze változót belepakoltam, majd logaritmikus és négyzetes változókat kezdtem bepakolni, mert a pontdiagramok alapján lehet, hogy nem lineáris a kapcsolat a változók között.
+#Modellválasztásnál először az össze változót belepakoltam, majd logaritmikus és négyzetes változókat kezdtem bepakolni, mert a pontdiagramok alapján lehet, hogy nem lineáris a kapcsolat a változók között. Már az ábrák mutatják, hogy az alacsony bevételű filmek esetén nagyon sok megfigyelés nagyon eltér a lineáris trendtől. Próbálkoztam logaritmikus függő változóval is, ez esetben jelentősen (~0.5-re) csökkent a korrigált R^2.
 
 #Maradéktagok: a valós és a becsült értékek közötti különbség. "Kisebb" jövedelem esetén kisebb a maradéktagok szórása, ami érthető, a megfigyelések fele 48918.2 ezer usd alatti, az átlag viszont 132496.4 ezer usd. A "kis" értékeket felülbecsli. Mintázat is látszik az adatokban, ezt nem sikerült kiszűrni, hiába tettem be újabb változókat egyáltalán nem gyengült.Tehát újabb változók kellenének a bevételek varianciájának magyarázatához. A korrigált R^2 viszont elég magas ~ 0.75. A maradéktagok standard hibája 107.400 (az összes adaton lefutatott regresszióban), ami rendkívül magas, majdnem az átlaggal egyenlő.
 
