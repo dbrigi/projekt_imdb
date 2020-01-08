@@ -7,7 +7,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r message=FALSE}
+```{r message=FALSE, warning=FALSE}
 options(scipen = 999)
 library(data.table)
 library(ggplot2)
@@ -24,7 +24,7 @@ library(caret)
 ## Adatok beolvasása, áttekintése
 
 ```{r message=FALSE, warning=FALSE}
-metadata <- fread("data/the-movies-dataset/movies_metadata.csv", select = c("budget", "original_language", "popularity", "release_date", "revenue", "runtime", "title", "vote_average", "vote_count", "spoken_languages", "id", "imdb_id"), fill = TRUE, encoding = "UTF-8")
+metadata <- fread("data/movies_metadata.csv", select = c("budget", "original_language", "popularity", "release_date", "revenue", "runtime", "title", "vote_average", "vote_count", "spoken_languages", "id", "imdb_id"), fill = TRUE, encoding = "UTF-8")
 
 imdb_score_revenue <- fread("data/score_revenue.csv", select = "imdb_score")
 imdb_score_revenue <- data.table("imdb_score" = imdb_score_revenue$imdb_score)
