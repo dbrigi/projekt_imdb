@@ -1,0 +1,495 @@
+---
+title: "project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+options(scipen = 999)
+library(data.table)
+library(ggplot2)
+library(magrittr)
+library(purrr)
+library(tidyr)
+library(dplyr)
+library(jsonlite)
+library(stringr)
+library(tidytext)
+library(caret)
+```
+
+## Adatok beolvasása, áttekintése
+
+```{r message=FALSE, warning=FALSE}
+metadata <- fread("data/the-movies-dataset/movies_metadata.csv", select = c("budget", "original_language", "popularity", "release_date", "revenue", "runtime", "title", "vote_average", "vote_count", "spoken_languages", "id", "imdb_id"), fill = TRUE, encoding = "UTF-8")
+
+imdb_score_revenue <- fread("data/score_revenue.csv", select = "imdb_score")
+imdb_score_revenue <- data.table("imdb_score" = imdb_score_revenue$imdb_score)
+
+revenue_new <- fread("data/revenue_new.csv", select = "x")
+revenue_new <- data.table("revenue_new"  = revenue_new$x)
+
+summary(metadata)
+summary(imdb_score_revenue)
+summary(revenue_new)
+```
+
+
+## Nyelv 
+#language_dummy = 1, ha szinkronizálták
+#Csak angol nyelven elérhető filmek "spoken_languages" változója 40 karakterből állt, próbálgatás után 50 karakternél húztam meg a határt, feltételezem, hogy efölött több nyelv szerepel.
+
+```{r}
+metadata[, language_dummy := 0]
+
+metadata[, .(num_char = nchar(spoken_languages))] %>%
+  .[, .N, by = num_char]
+
+metadata[nchar(metadata$spoken_languages) == 49]
+metadata[nchar(metadata$spoken_languages) == 66]
+
+
+metadata[nchar(metadata$spoken_languages) > 50, language_dummy := 1]
+```
+
+#Valószínűtleg, hogy egy filmnek ne legyen költségvetése, a 0 bevétel sem túl hiteles -> ezeket hiányzó adatoknak veszem.
+#A mennyiségi változókat és a dátumot megfelelő formátumba konvertálom.
+
+```{r message=FALSE, warning=FALSE}
+metadata[, budget := as.integer(budget)]
+metadata[budget == 0, budget := "NA"]
+
+metadata[, revenue := as.numeric(revenue)]
+metadata[revenue == 0, revenue := "NA"]
+
+metadata[, popularity := as.numeric(popularity)]
+
+require(fasttime)
+metadata[, release_date := as.Date(fastPOSIXct(release_date))]
+
+metadata[, original_language := as.factor(original_language)]
+```
+
+
+## Furcsaságok
+#(Az "id", és a "spoken_languages" nem alkalmazható elemzésre/előrejelzésre, ezekre nem lesz szükség a továbbiakban.)
+
+```{r}
+metadata[title == "", title := NA]
+metadata <- metadata[is.na(title) == FALSE]
+
+metadata[spoken_languages == "[]", spoken_languages := NA]
+
+metadata <- keep(metadata, colnames(metadata) != "id" & 
+       colnames(metadata) != "spoken_languages")
+```
+
+## Duplikátumok
+
+```{r}
+N_metadata <- metadata[, .N]
+uniqueN_metadata <- metadata[, uniqueN(.SD)]
+N_metadata - uniqueN_metadata
+
+metadata <- metadata[, unique(.SD)]
+```
+
+## Dátumok kezelése
+
+```{r}
+metadata <- data.table(metadata,
+                 year = as.numeric(format(metadata$release_date, format = "%Y")),
+                 month = as.numeric(format(metadata$release_date, format = "%m")),
+                 day = as.numeric(format(metadata$release_date, format = "%d")))
+```
+
+
+```{r}
+metadata[, .N, by = year][order(-year)]
+```
+
+#2018? 2020??? (kiszivárogtak)
+
+```{r}
+metadata[year > 2017]
+```
+
+
+#Idősoros adatokkal nehezebb lenne dolgozni. Felteszem, hogy a 2010-2016 között nem történt változás a filmnézési/értékelési szokásokban. (2017-et is kiveszem, nem tudom pontosan, hogy mikor gyűjtötték az adatokat. Nem szeretnék nem megjelent filmeket számításba venni, úgy gondolom megtekintés előtt eltérnek az értékelések a megtekintés utániaktól.) Tehát a 2010-es éveket egy időszaknak tekintem:
+
+```{r}
+metadata <- metadata[year %in% c(2010:2016)]
+summary(metadata)
+```
+
+#A 0 perc hosszúságú filmeket hiányzónak veszem.
+
+```{r message=FALSE, warning=FALSE}
+metadata[runtime == 0, runtime := "NA"]
+```
+
+#Vannak több órás filmek is, ezek többsége több részből áll. Ezeket szeretném kiszűrni, a sorozatokat több szempontból eltérhetnek az egyrészes filmektől pl.:  nehezebb összehasonlítani Nem lehet pontosan meghúzni a határt, 240 perc felett nagyon kevés az egyrészes film.
+
+```{r}
+metadata[runtime > 240, .N]
+metadata <- metadata[runtime > 240, runtime := NA]
+```
+
+#Irreálisan alacsony költségvetésű és bevételű filmek: adathiba, rosszul szedték le, vagy nem usd-ben vannak.
+#Az első kvartilis 7 számjegyű
+#Utánajárás után: a nem angol filmek közül véletlenszerűen kiválasztottam párat, és arra a következtetésre jutottam, hogy érdemes kiszűrni az 1.000.000 usd alattiakat.Angol nyelvű filmek között a 10.000 usd alatt szinte biztosan adathiba.
+#Ezt a változót később el is hagyom, mert teljesen használhatatlan. IMDB-n néha feltüntetik a premier heti bevételeket, az usa bevételeket és az összes (világszintű) bevételt. Ezek közül gyakran hiányzik 1-2. Ezt az adatok gyűjtője nem vette figyelembe. Mivel nem akarom ugyanannak tekinteni az usa-bevételeket és az összes bevételt, ezért én is megpróbálkoztam a scrapeléssel.
+
+```{r}
+metadata[budget < 1000000 & original_language != "en", .N]
+metadata[budget < 1000000 & original_language != "en"][order(-budget)]
+
+
+metadata[budget < 10000 & original_language == "en", .N]
+metadata[budget < 10000 & original_language == "en"][order(budget)]
+
+metadata[budget < 10000, .budget := NA]
+```
+
+#Nem lehet pontosan kiszűrni, de az 1000 dollár alattiak szinte biztosan elírások (vagy csak az USA-beli bevételeket vették figyelembe).
+
+```{r message=FALSE, warning=FALSE}
+metadata[revenue < 1000, .N]
+metadata[revenue > 1000][order(-revenue)]
+```
+
+## Nyelv
+#dummy_en = 1, ha az eredeti nyelv az angol
+
+```{r}
+metadata[, dummy_en := 0]
+metadata[original_language == "en", dummy_en := 1]
+```
+
+#Legalább 10-en értékelték (népszerűtlen filmek, ezeknél az IMDB-n általában nincs feltüntetve sem a bevétel, sem a költségvetés) és nincsenek hiányzó adatok (egyszerűség miatt, a regresszió úgyis kidobná.)
+
+```{r}
+metadata[is.na(budget) == FALSE & is.na(dummy_en) == FALSE & is.na(language_dummy) == FALSE & vote_count > 10 & is.na(runtime) == FALSE, .N]
+metadata <- metadata[is.na(budget) == FALSE & is.na(dummy_en) == FALSE & is.na(language_dummy) == FALSE & vote_count > 10 & is.na(runtime) == FALSE]
+```
+
+## Egyesítés
+#revenue_new és imdb_score_revenue már az új, elvileg ezekben nincs hiba
+
+```{r message=FALSE, warning=FALSE}
+metadata_new = data.table(metadata, revenue_new)
+metadata_new <- metadata_new[is.na(revenue_new) == FALSE]
+metadata_new <- data.table(metadata_new, imdb_score_revenue)
+```
+
+#Az együtthatók átláthatósága miatt
+#Regresszióban zavaró amikor az együtthatók 5-8 számjegyűek.
+
+```{r}
+metadata_new[, revenue_new_1000 := revenue_new/1000]
+metadata_new[, budget_1000 := budget/1000]
+```
+
+#A regressziókban csak a numerikus változókat szerepeltetem, a többire nem lesz szükség.
+
+```{r}
+metadata_new_numeric <- keep(metadata_new, colnames(metadata_new) %in% 
+c("budget_1000", "revenue_new_1000", "popularity", "runtime", "vote_average", "vote_count",
+"dummy_en", "language_dummy", "imdb_score"))
+```
+
+#Változók közötti kapcsolatok
+
+```{r}
+ggplot(metadata_new_numeric, aes(x = budget_1000, y = revenue_new_1000)) + 
+  geom_point()
+```
+  
+```{r}
+ggplot(metadata_new_numeric, aes(x = runtime, y = revenue_new_1000)) + 
+  geom_point()
+```
+
+```{r}
+ggplot(metadata_new_numeric, aes(x = vote_average, y = revenue_new_1000)) + 
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+#nem lineáris kapcsolat (?)
+  
+```{r}
+ggplot(metadata_new_numeric, aes(x = vote_count, y = revenue_new_1000)) + 
+  geom_point()
+```
+
+```{r}
+ggplot(metadata_new_numeric, aes(x = popularity, y = revenue_new_1000)) + 
+  geom_point()
+```
+
+#A nagyon népszerű filmek esetében alacsony a bevétel? Ez lehet, hogy adathiba.
+
+```{r}
+ggplot(metadata_new_numeric, aes(x = imdb_score, y = revenue_new_1000)) + 
+  geom_point()
+```
+  
+```{r}
+summary(metadata_new_numeric)
+```
+
+```{r}
+corr <- metadata_new %>%
+  keep(is.numeric) %>% 
+  cor(use = "na.or.complete")
+
+corr
+```
+
+```{r}
+corr[corr > abs(0.9) & corr!= abs(1)]
+```
+
+```{r message=FALSE, warning=FALSE}
+fold <- 5
+n <- nrow(metadata_new_numeric)
+set.seed(65445)
+split <- split(sample(1:n), 1:fold) #5 csoportba rendezi az adatok sorszámait
+test_ <- unlist(split[5])
+train_ <- unlist(split[c(1:4)])
+test <- metadata_new_numeric[test_]
+train <- metadata_new_numeric[train_]
+```
+
+#Teljes adaton:
+
+```{r}
+reg <- lm(revenue_new_1000 ~ .,
+          data = metadata_new_numeric)
+
+summary(reg)
+```
+
+```{r}
+residuals <- data.table(residuals = reg$residuals, fitted = reg$fitted.values, metadata)
+ggplot(residuals, aes(fitted, residuals)) +
+  geom_point(alpha = .3)
+```
+
+#"Kis" értékek esetében felülbecsli, a szórás nő az illesztett értékekkel.
+
+```{r}
+form_1 <- as.formula(revenue_new_1000 ~ .)
+reg_1 <- lm(form_1,
+          data = train)
+
+MSE_1_train <- mean((reg_1$fitted.values - train[, revenue_new_1000])^2)
+
+p <- predict(reg_1, test)
+MSE_1_test = mean((p - test[, revenue_new_1000])^2)
+
+#summary(reg_1)
+```
+
+```{r}
+form_2 <- as.formula(revenue_new_1000 ~ . + log(runtime))
+reg_2 <- lm(form_2, 
+          data = train)
+
+MSE_2_train <- mean((reg_2$fitted.values - train[, revenue_new_1000])^2)
+
+p <- predict(reg_2, test)
+MSE_2_test = mean((p - test[, revenue_new_1000])^2)
+
+#summary(reg_2)
+```
+
+```{r}
+form_3 <- as.formula(revenue_new_1000 ~ . + log(runtime) + log(popularity))
+reg_3 <- lm(form_3, 
+          data = train)
+
+MSE_3_train <- mean((reg_3$fitted.values - train[, revenue_new_1000])^2)
+
+p <- predict(reg_3, test)
+MSE_3_test = mean((p - test[, revenue_new_1000])^2)
+
+#summary(reg_3)
+```
+
+```{r}
+form_4 <- as.formula(revenue_new_1000 ~ . + log(runtime) + log(popularity) + I(popularity^2))
+reg_4 <- lm(form_4, 
+          data = train)
+
+MSE_4_train <- mean((reg_4$fitted.values - train[, revenue_new_1000])^2)
+
+p <- predict(reg_4, test)
+MSE_4_test = mean((p - test[, revenue_new_1000])^2)
+
+#summary(reg_4)
+```
+
+```{r}
+form_5 <- as.formula(revenue_new_1000 ~ . + log(runtime) + log(popularity) + I(popularity^2) + log(vote_average)) 
+reg_5 <- lm(form_5, 
+          data = train)
+
+MSE_5_train <- mean((reg_5$fitted.values - train[, revenue_new_1000])^2)
+
+p <- predict(reg_5, test)
+MSE_5_test = mean((p - test[, revenue_new_1000])^2)
+
+#summary(reg_5)
+```
+
+#Összefoglalás:
+
+```{r}
+train_test <- data.table("model" = c(1:5),
+            `train MSE` = c(MSE_1_train, MSE_2_train, MSE_3_train, MSE_4_train, MSE_5_train),
+           `test MSE` = c(MSE_1_test, MSE_2_test, MSE_3_test, MSE_4_test, MSE_5_test))
+train_test
+```
+
+#cross validation
+
+```{r}
+train_control <- trainControl(method = "cv", number = 5)
+```
+
+```{r}
+set.seed(1)
+model_1 <- train(form_1,
+               data = metadata_new_numeric,
+               trControl = train_control,
+               method = "lm")
+model_1$resample
+cv_MSE_1 <- model_1$results$RMSE**2
+```
+
+```{r}
+set.seed(2)
+model_2 <- train(form_2,
+               data = metadata_new_numeric,
+               trControl = train_control,
+               method = "lm")
+model_2$resample
+cv_MSE_2 <- model_2$results$RMSE**2
+```
+
+```{r}
+set.seed(3)
+model_3 <- train(form_3,
+               data = metadata_new_numeric,
+               trControl = train_control,
+               method = "lm")
+model_3$resample
+cv_MSE_3 <- model_3$results$RMSE**2
+```
+
+```{r}
+set.seed(4)
+model_4 <- train(form_4,
+               data = metadata_new_numeric,
+               trControl = train_control,
+               method = "lm")
+model_4$resample
+cv_MSE_4 <- model_4$results$RMSE**2
+```
+
+```{r}
+set.seed(5)
+model_5 <- train(form_5,
+               data = metadata_new_numeric,
+               trControl = train_control,
+               method = "lm")
+model_5$resample
+cv_MSE_5 <- model_5$results$RMSE**2
+```
+
+#Összefoglalás:
+```{r}
+data.table(train_test, `cv MSE` = c(cv_MSE_1, cv_MSE_2, cv_MSE_3,
+                                    cv_MSE_4, cv_MSE_5))
+```
+
+#Adatok gyűjtése:
+
+```{r}
+#Scraping
+#n = nrow(metadata)
+#url_vector <- str_c("https://www.imdb.com/title/", metadata$imdb_id)
+
+#revenue <- c()
+#for (i in url_vector) {
+#    page <- read_html(i)
+#    movie_gross_15 <- html_node(page,'#titleDetails :nth-child(15)')
+#    movie_gross_14 <- html_node(page,'#titleDetails :nth-child(14)')
+#    movie_gross_13 <- html_node(page,'#titleDetails :nth-child(13)')
+#    data_15 <- html_text(movie_gross_15)
+#    data_14 <- html_text(movie_gross_14)
+#    data_13 <- html_text(movie_gross_13)
+      
+#      #15. sor
+#      if (is.na(data_15) == FALSE) {
+#      gross <-gsub("\n","", 
+#                    gsub(",", "",
+#                    substring(data_15, 31, 44)))
+                
+#      #tényleg a kumulatív bevétel
+#      if (substring(data_15, 2, 11) == "Cumulative") {
+#        revenue_n <- as.numeric(gross)
+#        n = which(url_vector == i)
+#        revenue[n] = revenue_n
+        
+#        }} else if (is.na(data_14) == FALSE) {
+#            gross <-gsub("\n","", 
+#                    gsub(",", "",
+#                    substring(data_14, 31, 44)))
+#                revenue_n <- as.numeric(gross)
+      
+#            #tényleg a kumulatív bevétel
+#            if (substring(data_14, 2, 11) == "Cumulative") {
+#            n = which(url_vector == i)
+#            revenue[n] = revenue_n
+            
+#            }} else if (is.na(data_13) == FALSE) {
+#            gross <-gsub("\n","", 
+#                    gsub(",", "",
+#                    substring(data_13, 31, 44)))
+#                revenue_n <- as.numeric(gross)
+      
+#            #tényleg a kumulatív bevétel
+#            if (substring(data_13, 2, 11) == "Cumulative") {
+#            n = which(url_vector == i)
+#            revenue[n] = revenue_n 
+#  }}}
+
+#revenue_new = revenue
+
+
+#url_vector_new <- str_c("https://www.imdb.com/title/", metadata_new$imdb_id)
+#imdb_score = c()  
+#for (i in url_vector_new) { 
+#  page <- read_html(i)
+#  rating_data <- html_nodes(page, "strong span")
+#  rating_text <- html_text(rating_data)
+#  rating <- as.numeric(rating_text)
+#  n = which(url_vector_new == i)
+#  imdb_score[n] <- rating
+#}
+
+#metadata_new <- data.table(metadata, revenue_new)
+#metadata_new <- metadata_new[is.na(revenue_new) == FALSE]
+
+#metadata_new <- data.table(metadata_new, imdb_score)
+
+#score_revenue <- data.table(imdb_score, metadata_new$revenue_new)
+#write.csv(score_revenue, "score_revenue.csv")
+```
+

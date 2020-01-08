@@ -1,0 +1,63 @@
+---
+title: "Riport"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#Az adatokat a kaggle-ről töltöttem le. Link: https://www.kaggle.com/rounakbanik/the-movies-dataset
+#Sajnos teljesen megbízhatotalan volt, ezért a bevétel változót megpróbáltam javítani. Ez sem tökéletes, hiszen az "eredeti" adatok szerzése óta növekedtek, felfelé módosították őket.
+
+#Irreálisan alacsony költségvetésű és bevételű filmek: adathiba, rosszul szedték le, vagy nem usd-ben vannak. Az első kvartilis 7 számjegyű.
+#Utánajárás után: a nem angol filmek közül véletlenszerűen kiválasztottam párat, és arra a következtetésre jutottam, hogy érdemes kiszűrni az 1.000.000 usd alattiakat.Angol nyelvű filmek között a 10.000 usd alatt szinte biztosan adathiba.
+#Ezt a változót később el is hagytam, mert teljesen használhatatlan. IMDB-n néha feltüntetik a premier heti bevételeket, az usa bevételeket és az összes (világszintű) bevételt. Ezek közül gyakran hiányzik 1-2. Ezt az adatok gyűjtője nem vette figyelembe. Mivel nem akarom ugyanannak tekinteni az usa-bevételeket és az összes bevételt, ezért én is megpróbálkoztam a scrapeléssel.
+#Nem lehet pontosan kiszűrni, de az 1000 dollár alattiak szinte biztosan elírások (vagy csak az USA-beli bevételeket vették figyelembe).
+
+#Végső változók:
+#revenue_new_1000: összes bevétel 1000 usd-ben
+#budget_1000: (becsült) költségvetés 1000 usd-ben
+#runtime: film hossza percben
+#vote_average: "régi" imdb pontszám
+#vote_count: szavazatok száma
+#popularity: a pro tagok tudják, hogy pontosan hogyan számolják, annyi ismert, hogy a filmadatlapok megtekintése beleszámít.
+#imdb_pontszám: felhasználók értékelések
+#dummy_en: 1, ha az eredeti nyelv az angol, 0 egyébként
+#language_dummy: 1, ha szinkronizálták (nem naprakész adatok), 0 ha nem
+
+   popularity          runtime       vote_average     vote_count      language_dummy  
+ Min.   :  0.1101   Min.   : 66.0   Min.   :3.500   Min.   :   11.0   Min.   :0.0000  
+ 1st Qu.:  6.8903   1st Qu.: 97.0   1st Qu.:5.700   1st Qu.:  216.8   1st Qu.:0.0000  
+ Median :  9.5805   Median :106.5   Median :6.300   Median :  618.0   Median :0.0000  
+ Mean   : 11.9848   Mean   :109.4   Mean   :6.258   Mean   : 1270.6   Mean   :0.2532  
+ 3rd Qu.: 13.4570   3rd Qu.:119.0   3rd Qu.:6.800   3rd Qu.: 1621.8   3rd Qu.:1.0000  
+ Max.   :213.8499   Max.   :180.0   Max.   :8.300   Max.   :14075.0   Max.   :1.0000  
+    dummy_en        imdb_score    revenue_new_1000     budget_1000    
+ Min.   :0.0000   Min.   :1.600   Min.   :      0.7   Min.   :     0  
+ 1st Qu.:1.0000   1st Qu.:5.900   1st Qu.:   9488.2   1st Qu.:  8790  
+ Median :1.0000   Median :6.500   Median :  48918.2   Median : 21000  
+ Mean   :0.9034   Mean   :6.435   Mean   : 132496.4   Mean   : 42200  
+ 3rd Qu.:1.0000   3rd Qu.:7.100   3rd Qu.: 151285.4   3rd Qu.: 50000  
+ Max.   :1.0000   Max.   :8.800   Max.   :2068223.6   Max.   :380000  
+ 
+
+
+#Előrejelzés választás indoklása: a változók nagyrésze kvantitatív. Készítettem pár dummy-t, de ezek között és a többi változó között nem volt erős kapcsolat. 
+#A bevétel (revenue_new) változó volt az, ami elég jól korrelált a többivel, és az összefüggéseket is logikusnak gondoltam (lehet ok-okozati kapcsolat), pl.: az imdb értékelés (imdb_score) nyilválóan pozitívan hat a bevételekre. A népszerűségre (popularity) is hasonlókat feltételezet, ez esetben gyengébb kapcsolatra számítok: a népszerűség forrása lehet negatív is (megnézik a film adatlapját, de nem nézik meg, legalábbis nem fizetnek a rossznak gondolt filmért).
+
+#Modellválasztásnál először az össze változót belepakoltam, majd logaritmikus és négyzetes változókat kezdtem bepakolni, mert a pontdiagramok alapján lehet, hogy nem lineáris a kapcsolat a változók között.
+
+#Maradéktagok: a valós és a becsült értékek közötti különbség. "Kisebb" jövedelem esetén kisebb a , ami érthető, a megfigyelések fele 48918.2 ezer usd alatti, az átlag viszont 132496.4 ezer usd. A "kis" értékeket felülbecsli. Mintázat is látszik az adatokban, ezt nem sikerült kiszűrni, hiába tettem be újabb változókat egyáltalán nem gyengült.Tehát újabb változók kellenének a bevételek varianciájának magyarázatához. A korrigált R^2 viszont elég magas ~ 0.75. A maradéktagok standard hibája 107.400 (az összes adaton lefutatott regresszióban), ami rendkívül magas, majdnem az átlaggal egyenlő.
+
+#Cross validációt végeztem az "overfitting" elkerülése végett.
+#ez alapján revenue_new_1000 ~ . + log(runtime) + log(popularity) + I(popularity^2) + log(vote_average) modell esetében a legkisebb az MSE (a train adatok esetében is igaz ez).
+
+
+
+
+
+
+
+
